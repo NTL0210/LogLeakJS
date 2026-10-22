@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Test and coverage output
+coverage/
+*.lcov
+
+# Packed artifacts
+*.tgz
+
+# Local reports and probes
+reports/
+.tmp-*
+*.log
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Editors and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

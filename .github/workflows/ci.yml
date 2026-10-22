@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.12.0', '22.x', '24.x', '26.x']
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install from the lockfile without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  quality:
+    name: Lint, privacy checks, package allowlist
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install from the lockfile without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Scan the repository for credential patterns
+        run: npm run check:secrets
+
+      - name: Verify the package file allowlist
+        run: npm run check:package
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Collect coverage
+        run: npm run test:coverage
+
+  tarball-smoke:
+    name: Install and import the packed tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install from the lockfile without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Pack, install, and import the tarball in a clean project
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$(npm pack --json --ignore-scripts | node -e '
+            let input = "";
+            process.stdin.on("data", (chunk) => (input += chunk));
+            process.stdin.on("end", () => {
+              const parsed = JSON.parse(input);
+              process.stdout.write(parsed[0].filename);
+            });
+          ')"
+          consumer="$RUNNER_TEMP/logleak-consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$GITHUB_WORKSPACE/$tarball"
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import {
+              createLogLeakDetector,
+              assertNoSensitiveLogLeaks,
+              formatJsonReport,
+              EXIT_CODES,
+            } from "logleak-test";
+            const detector = createLogLeakDetector();
+            const result = detector.analyze({ password: "synthetic-value" });
+            assert.equal(result.status, "leaks");
+            assert.equal(result.exitCode, EXIT_CODES.LEAKS);
+            assert.equal(JSON.stringify(result).includes("synthetic-value"), false);
+            assert.throws(() => assertNoSensitiveLogLeaks(result));
+            assert.equal(typeof formatJsonReport(result), "string");
+          '
+          rm -f "$GITHUB_WORKSPACE/$tarball"

@@ -1,0 +1,13 @@
+# Normalize text files to LF in the repository and in CI.
+* text=auto eol=lf
+
+# Windows-only helper scripts may use CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary fixtures.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
